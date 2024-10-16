@@ -1,15 +1,22 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 import pandas as pd
 import joblib
+import os
 
 app = FastAPI()
 
-# Load the saved model and scaler
-kmeans_model = joblib.load('models/kmeans_model')
-standard_scaler = joblib.load('models/standard_scaler')
+# Get the directory where the current script is located
+base_dir = os.path.dirname(__file__)
+
+# Load the saved model and scaler with error handling
+try:
+    kmeans_model = joblib.load(os.path.join(base_dir, 'models', 'kmeans_model.pkl'))
+    standard_scaler = joblib.load(os.path.join(base_dir, 'models', 'standard_scaler.pkl'))
+except FileNotFoundError as e:
+    raise HTTPException(status_code=500, detail=f"Model file not found: {e}")
 
 class PredictionRequest(BaseModel):
     N: float
@@ -18,10 +25,10 @@ class PredictionRequest(BaseModel):
     temperature: float
     humidity: float
     ph: float
-    rainfall: float  # Add rainfall to the request model
+    rainfall: float
 
 # Mount the templates directory
-templates = Jinja2Templates(directory="templates")
+templates = Jinja2Templates(directory=os.path.join(base_dir, "templates"))
 
 @app.get("/", response_class=HTMLResponse)
 def read_root(request: Request):
@@ -29,18 +36,19 @@ def read_root(request: Request):
 
 @app.post("/predict")
 def predict(request: PredictionRequest):
-    data = pd.DataFrame([request.model_dump()])  # Use model_dump instead of dict
-    scaled_data = standard_scaler.transform(data)
-    cluster = kmeans_model.predict(scaled_data)
-    df = pd.read_csv('./models/app_data.csv')
-    # print(cluster)
-    # print(type(cluster))
-    # print(df)
-    df2 = df[df['cluster']==cluster[0]]
-    crops = list(df2['Label'].value_counts().keys())
-    # print(crops)
-    # return crops
-    return JSONResponse(content={"cluster": crops})
+    try:
+        data = pd.DataFrame([request.dict()])  # Convert request data to DataFrame
+        scaled_data = standard_scaler.transform(data)
+        cluster = kmeans_model.predict(scaled_data)
+        df = pd.read_csv(os.path.join(base_dir, 'models', 'app_data.csv'))
+
+        # Filter the crops based on the predicted cluster
+        df2 = df[df['cluster'] == cluster[0]]
+        crops = list(df2['Label'].value_counts().keys())
+
+        return JSONResponse(content={"cluster": crops})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Prediction error: {e}")
 
 if __name__ == "__main__":
     import uvicorn
